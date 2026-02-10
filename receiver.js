@@ -1,124 +1,67 @@
 const context = cast.framework.CastReceiverContext.getInstance();
 const playerManager = context.getPlayerManager();
-
-// Debug Logger
-const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
-const LOG_TAG = "MyAPP.LOG";
-
-castDebugLogger.setEnabled(true);
-castDebugLogger.loggerLevelByEvents = {
-  "cast.framework.events.category.CORE": cast.framework.LoggerLevel.INFO,
-  "cast.framework.events.EventType.MEDIA_STATUS":
-    cast.framework.LoggerLevel.DEBUG,
-};
-castDebugLogger.loggerLevelByTags = {
-  LOG_TAG: cast.framework.LoggerLevel.DEBUG,
-};
-
 let shakaPlayer;
-let resolveShakaPlayerReady;
-const shakaPlayerReadyPromise = new Promise(resolve => {
-  resolveShakaPlayerReady = resolve;
-});
+const videoElement = document.getElementById('myVideoElement');
 
-// 初始化 Shaka Player 實例
+// 初始化您自己的 Shaka Player 實例
 function initShakaPlayer() {
-  castDebugLogger.info(LOG_TAG, "initShakaPlayer called");
-  const mediaElement = playerManager.getMediaElement();
-
-  if (!mediaElement) {
-    castDebugLogger.error(LOG_TAG, "Media Element not available even after context is READY.");
+  if (!window.shaka) {
+    console.error("Shaka Player library not loaded!");
     return;
   }
-  castDebugLogger.info(LOG_TAG, "Media Element obtained successfully.");
-
-  // 確認 CAF 提供的 Shaka 是否存在
-  if (typeof shaka === 'undefined') {
-    castDebugLogger.error(LOG_TAG, "shaka namespace not found! CAF did not load Shaka Player.");
-    return;
-  }
-  castDebugLogger.info(LOG_TAG, `Shaka Player version provided by CAF: ${shaka.Player.version}`);
-
-  try {
-    shaka.polyfill.installAll();
-    if (shaka.Player.isBrowserSupported()) {
-      shakaPlayer = new shaka.Player(mediaElement);
-      castDebugLogger.info(LOG_TAG, "Shaka Player instance created.");
-
-      shakaPlayer.addEventListener('error', onShakaError);
-
-      // 基本的 Shaka Player 設定
-      shakaPlayer.configure({
-        abr: {
-          enabled: true
-        },
-        // 您可以根據需要添加更多配置
-      });
-      castDebugLogger.info(LOG_TAG, "Shaka Player configured.");
-      resolveShakaPlayerReady(); // 通知 Shaka Player 已就緒
-    } else {
-      castDebugLogger.error(LOG_TAG, "Browser not supported by Shaka Player!");
-    }
-  } catch (e) {
-    castDebugLogger.error(LOG_TAG, "Error during Shaka Player initialization:", e);
+  shaka.polyfill.installAll();
+  if (shaka.Player.isBrowserSupported()) {
+    shakaPlayer = new shaka.Player(videoElement);
+    console.log("My custom Shaka Player version:", shaka.Player.version);
+    // 在這裡設定您的 Shaka Player 配置
+    // shakaPlayer.configure({...});
+    shakaPlayer.addEventListener('error', onShakaError);
+  } else {
+    console.error('Shaka Player not supported by this browser.');
   }
 }
 
-// Shaka Player 錯誤處理函式
 function onShakaError(event) {
-  const error = event.detail;
-  castDebugLogger.error(LOG_TAG, 'Shaka Error code:', error.code, 'Error:', error);
-  playerManager.broadcastError(
-    cast.framework.messages.ErrorType.ERROR,
-    cast.framework.messages.ErrorReason.GENERIC,
-    error.code
-  );
+  console.error('Shaka Player Error:', event.detail);
+  // 處理錯誤
 }
 
-// LOAD 訊息攔截器 (用於直接 URL 載入)
+// 攔截 LOAD 請求
 playerManager.setMessageInterceptor(
   cast.framework.messages.MessageType.LOAD,
-  async (request) => {
-    castDebugLogger.info(LOG_TAG, "Intercepting LOAD request");
-    await shakaPlayerReadyPromise;
-
+  loadRequestData => {
+    console.log('LOAD interceptor', loadRequestData);
     if (!shakaPlayer) {
-      castDebugLogger.error(LOG_TAG, "Shaka Player not initialized.");
-      return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
+      console.error("Shaka Player not initialized!");
+      return new cast.framework.messages.ErrorData(
+        cast.framework.messages.ErrorType.LOAD_FAILED
+      );
     }
 
-    if (request.media && request.media.contentUrl) {
-      const manifestUri = request.media.contentUrl;
-      const contentType = request.media.contentType;
+    const media = loadRequestData.media;
+    const url = media.contentId || media.contentUrl;
 
-      if (!contentType) {
-        castDebugLogger.error(LOG_TAG, "media.contentType is required for LOAD");
-        return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.INVALID_REQUEST);
-      }
-
-      castDebugLogger.info(LOG_TAG, "Loading with Shaka:", manifestUri, "Type:", contentType);
-      try {
-        await shakaPlayer.load(manifestUri, null, contentType);
-        castDebugLogger.info(LOG_TAG, "Shaka load() successful for:", manifestUri);
-        request.media.streamType = cast.framework.messages.StreamType.BUFFERED;
-        return request;
-      } catch (error) {
-        onShakaError({ detail: error });
-        return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
-      }
+    if (url) {
+      // 使用您自己的 Shaka Player 實例播放
+      return shakaPlayer.load(url).then(() => {
+        console.log('Media loaded by my custom Shaka Player');
+        videoElement.play();
+        // 可以選擇性地廣播狀態，但媒體控制權在您手中
+        // 返回 null 或一個解析後的 Promise 以阻止 CAF 進行預設處理
+        return null;
+      }).catch(error => {
+        console.error('My Shaka Player load error:', error);
+        return new cast.framework.messages.ErrorData(
+          cast.framework.messages.ErrorType.LOAD_FAILED
+        );
+      });
     } else {
-      castDebugLogger.warn(LOG_TAG, "LOAD request without media.contentUrl, passing through.");
-      return request; // 或者返回錯誤，取決於您是否允許沒有 contentUrl 的 LOAD
+      return new cast.framework.messages.ErrorData(
+        cast.framework.messages.ErrorType.INVALID_REQUEST
+      );
     }
   }
 );
 
-// 等待 CAF 環境準備就緒
-context.addEventListener(cast.framework.system.EventType.READY, () => {
-  castDebugLogger.info(LOG_TAG, 'Cast Receiver Context READY');
-  initShakaPlayer();
-});
-
-castDebugLogger.info(LOG_TAG, 'Calling context.start()');
-context.start({});
-castDebugLogger.info(LOG_TAG, 'context.start() called');
+context.start();
+initShakaPlayer();
