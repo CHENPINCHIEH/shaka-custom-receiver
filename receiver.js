@@ -17,10 +17,16 @@ castDebugLogger.loggerLevelByTags = {
 };
 
 let shakaPlayer;
-const mediaElement = playerManager.getMediaElement();
 
 // 初始化 Shaka Player
 function initShakaPlayer() {
+      // 在這裡取得 mediaElement，因為此時 CAF 已準備就緒
+  const mediaElement = playerManager.getMediaElement();
+
+  if (!mediaElement) {
+    castDebugLogger.error(LOG_TAG, "Media Element not available even after context is READY.");
+    return;
+  }
   if (!mediaElement) {
     castDebugLogger.error(LOG_TAG, "Media Element not available to initialize Shaka Player.");
     return;
