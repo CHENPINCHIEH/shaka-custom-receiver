@@ -67,11 +67,15 @@ function onShakaError(event) {
 
 playerManager.setMessageInterceptor(
   cast.framework.messages.MessageType.LOAD,
-  (request) => {
-    castDebugLogger.info(LOG_TAG, "Intercepting LOAD request for Shaka Player");
+  async (request) => { // 將攔截器函數標記為 async
+    castDebugLogger.info(LOG_TAG, "Intercepting LOAD request");
+
+    // 等待 Shaka Player 初始化完成
+    await shakaPlayerReadyPromise;
+    castDebugLogger.info(LOG_TAG, "Shaka Player readiness check passed.");
 
     if (!shakaPlayer) {
-      castDebugLogger.error(LOG_TAG, "Shaka Player not initialized.");
+      castDebugLogger.error(LOG_TAG, "Shaka Player not initialized even after ready promise. Check initShakaPlayer logs.");
       return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
     }
 
@@ -84,32 +88,23 @@ playerManager.setMessageInterceptor(
         return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.INVALID_REQUEST);
       }
 
-      castDebugLogger.info(LOG_TAG, "Loading from contentUrl:", manifestUri, "Type:", contentType);
+      castDebugLogger.info(LOG_TAG, "Loading with Shaka:", manifestUri, "Type:", contentType);
 
-      // 使用 Shaka Player 載入媒體，傳入 contentType 提示
-      return shakaPlayer.load(manifestUri, null, contentType).then(() => {
-        castDebugLogger.info(LOG_TAG, "Shaka Player has started loading the content from contentUrl.");
+      try {
+        await shakaPlayer.load(manifestUri, null, contentType);
+        castDebugLogger.info(LOG_TAG, "Shaka Player load() call successful for:", manifestUri);
 
-        // 更新 request 物件以供 CAF 使用
-        // 保留發送端提供的 contentId 或使用 manifestUri
         request.media.contentId = request.media.contentId || manifestUri;
-        // contentType 已由發送端提供
         request.media.streamType = cast.framework.messages.StreamType.BUFFERED;
-
-        // Metadata 現在應該由發送端在 request.media.metadata 中提供
         if (!request.media.metadata) {
-          castDebugLogger.warn(LOG_TAG, "Metadata not provided by sender in media.metadata. UI may be incomplete.");
-          // 您可以建立一個空的 metadata 物件以避免錯誤
           request.media.metadata = new cast.framework.messages.GenericMediaMetadata();
           request.media.metadata.title = "Unknown Title";
         }
-
-        // 解析修改後的 request，通知 CAF 載入已處理
-        return Promise.resolve(request);
-      }).catch((error) => {
-        onShakaError({ detail: error }); // 呼叫我們的 Shaka 錯誤處理
-        return Promise.reject(new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED));
-      });
+        return request; // 返回修改後的 request
+      } catch (error) {
+        onShakaError({ detail: error });
+        return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
+      }
     } else {
       castDebugLogger.error(LOG_TAG, "LOAD request must contain media.contentUrl");
       return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.INVALID_REQUEST);
