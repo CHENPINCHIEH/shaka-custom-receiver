@@ -5,7 +5,6 @@ const playerManager = context.getPlayerManager();
 const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
 const LOG_TAG = "MyAPP.LOG";
 
-// Enable debug logger
 castDebugLogger.setEnabled(true);
 castDebugLogger.loggerLevelByEvents = {
   "cast.framework.events.category.CORE": cast.framework.LoggerLevel.INFO,
@@ -17,39 +16,45 @@ castDebugLogger.loggerLevelByTags = {
 };
 
 let shakaPlayer;
+let resolveShakaPlayerReady;
+const shakaPlayerReadyPromise = new Promise(resolve => {
+  resolveShakaPlayerReady = resolve;
+});
 
 // 初始化 Shaka Player
 function initShakaPlayer() {
-      // 在這裡取得 mediaElement，因為此時 CAF 已準備就緒
   const mediaElement = playerManager.getMediaElement();
 
   if (!mediaElement) {
     castDebugLogger.error(LOG_TAG, "Media Element not available even after context is READY.");
+    // 如果無法獲取 mediaElement，Shaka Player 無法初始化，可能需要考慮拒絕 Promise
     return;
   }
-  if (!mediaElement) {
-    castDebugLogger.error(LOG_TAG, "Media Element not available to initialize Shaka Player.");
-    return;
-  }
-  shaka.polyfill.installAll();
-  if (shaka.Player.isBrowserSupported()) {
-    shakaPlayer = new shaka.Player(mediaElement);
-    castDebugLogger.info(LOG_TAG, "Shaka Player initialized.");
+  castDebugLogger.info(LOG_TAG, "Media Element obtained successfully.");
 
-    // Shaka Player 錯誤事件監聽
-    shakaPlayer.addEventListener('error', onShakaError);
+  try {
+    shaka.polyfill.installAll();
+    if (shaka.Player.isBrowserSupported()) {
+      shakaPlayer = new shaka.Player(mediaElement);
+      castDebugLogger.info(LOG_TAG, "Shaka Player instance created.");
 
-    // 可選：設定 Shaka Player
-    shakaPlayer.configure({
-      abr: {
-        enabled: true
-      },
-      streaming: {
-        bufferingGoal: 60, // 緩衝目標秒數
-      }
-    });
-  } else {
-    castDebugLogger.error(LOG_TAG, "Browser not supported by Shaka Player!");
+      shakaPlayer.addEventListener('error', onShakaError);
+
+      shakaPlayer.configure({
+        abr: {
+          enabled: true
+        },
+        streaming: {
+          bufferingGoal: 60,
+        }
+      });
+      castDebugLogger.info(LOG_TAG, "Shaka Player configured.");
+      resolveShakaPlayerReady(); // 通知等待者 Shaka Player 已就緒
+    } else {
+      castDebugLogger.error(LOG_TAG, "Browser not supported by Shaka Player!");
+    }
+  } catch (e) {
+    castDebugLogger.error(LOG_TAG, "Error during Shaka Player initialization:", e);
   }
 }
 
@@ -57,7 +62,6 @@ function initShakaPlayer() {
 function onShakaError(event) {
   const error = event.detail;
   castDebugLogger.error(LOG_TAG, 'Shaka Error code:', error.code, 'Error:', error);
-  // 向 CAF 廣播錯誤
   playerManager.broadcastError(
     cast.framework.messages.ErrorType.ERROR,
     cast.framework.messages.ErrorReason.GENERIC,
@@ -112,35 +116,11 @@ playerManager.setMessageInterceptor(
   }
 );
 
-// --- 關於 Smart Display 優化的部分 ---
-// 注意：原先的 getBrowseItems 和 browseContent 設定依賴於 SAMPLE_URL。
-// 由於我們不再使用 SAMPLE_URL，這些功能將無法像以前那樣運作。
-// 您需要重新設計媒體瀏覽功能，使其不依賴於那個固定的 JSON 檔案。
-// 例如，媒體瀏覽的項目可能需要由發送端提供，或者從您的其他後端服務獲取。
-
-// const touchControls = cast.framework.ui.Controls.getInstance();
-// const playerData = new cast.framework.ui.PlayerData();
-// const playerDataBinder = new cast.framework.ui.PlayerDataBinder(playerData);
-
-// playerDataBinder.addEventListener(
-//   cast.framework.ui.PlayerDataEventType.MEDIA_CHANGED,
-//   (e) => {
-//     if (!e.value) return;
-//     // touchControls.setBrowseContent(browseContent); // browseContent 需要新的數據源
-//     touchControls.clearDefaultSlotAssignments();
-//     touchControls.assignButton(
-//       cast.framework.ui.ControlsSlot.SLOT_PRIMARY_1,
-//       cast.framework.ui.ControlsButton.SEEK_BACKWARD_30
-//     );
-//   }
-// );
-
-// 在 context 啟動後設置事件監聽器
 context.addEventListener(cast.framework.system.EventType.READY, () => {
   castDebugLogger.info(LOG_TAG, 'Cast Receiver Context READY');
-  // READY 事件後 mediaElement 才保證可用
   initShakaPlayer();
 });
 
-// 啟動 CAF Receiver Context
+castDebugLogger.info(LOG_TAG, 'Calling context.start()');
 context.start({});
+castDebugLogger.info(LOG_TAG, 'context.start() called');
