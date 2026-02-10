@@ -21,16 +21,23 @@ const shakaPlayerReadyPromise = new Promise(resolve => {
   resolveShakaPlayerReady = resolve;
 });
 
-// 初始化 Shaka Player
+// 初始化 Shaka Player 實例
 function initShakaPlayer() {
+  castDebugLogger.info(LOG_TAG, "initShakaPlayer called");
   const mediaElement = playerManager.getMediaElement();
 
   if (!mediaElement) {
     castDebugLogger.error(LOG_TAG, "Media Element not available even after context is READY.");
-    // 如果無法獲取 mediaElement，Shaka Player 無法初始化，可能需要考慮拒絕 Promise
     return;
   }
   castDebugLogger.info(LOG_TAG, "Media Element obtained successfully.");
+
+  // 確認 CAF 提供的 Shaka 是否存在
+  if (typeof shaka === 'undefined') {
+    castDebugLogger.error(LOG_TAG, "shaka namespace not found! CAF did not load Shaka Player.");
+    return;
+  }
+  castDebugLogger.info(LOG_TAG, `Shaka Player version provided by CAF: ${shaka.Player.version}`);
 
   try {
     shaka.polyfill.installAll();
@@ -40,16 +47,15 @@ function initShakaPlayer() {
 
       shakaPlayer.addEventListener('error', onShakaError);
 
+      // 基本的 Shaka Player 設定
       shakaPlayer.configure({
         abr: {
           enabled: true
         },
-        streaming: {
-          bufferingGoal: 60,
-        }
+        // 您可以根據需要添加更多配置
       });
       castDebugLogger.info(LOG_TAG, "Shaka Player configured.");
-      resolveShakaPlayerReady(); // 通知等待者 Shaka Player 已就緒
+      resolveShakaPlayerReady(); // 通知 Shaka Player 已就緒
     } else {
       castDebugLogger.error(LOG_TAG, "Browser not supported by Shaka Player!");
     }
@@ -69,17 +75,15 @@ function onShakaError(event) {
   );
 }
 
+// LOAD 訊息攔截器 (用於直接 URL 載入)
 playerManager.setMessageInterceptor(
   cast.framework.messages.MessageType.LOAD,
-  async (request) => { // 將攔截器函數標記為 async
+  async (request) => {
     castDebugLogger.info(LOG_TAG, "Intercepting LOAD request");
-
-    // 等待 Shaka Player 初始化完成
     await shakaPlayerReadyPromise;
-    castDebugLogger.info(LOG_TAG, "Shaka Player readiness check passed.");
 
     if (!shakaPlayer) {
-      castDebugLogger.error(LOG_TAG, "Shaka Player not initialized even after ready promise. Check initShakaPlayer logs.");
+      castDebugLogger.error(LOG_TAG, "Shaka Player not initialized.");
       return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
     }
 
@@ -88,34 +92,28 @@ playerManager.setMessageInterceptor(
       const contentType = request.media.contentType;
 
       if (!contentType) {
-        castDebugLogger.error(LOG_TAG, "media.contentType is required when using media.contentUrl");
+        castDebugLogger.error(LOG_TAG, "media.contentType is required for LOAD");
         return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.INVALID_REQUEST);
       }
 
       castDebugLogger.info(LOG_TAG, "Loading with Shaka:", manifestUri, "Type:", contentType);
-
       try {
         await shakaPlayer.load(manifestUri, null, contentType);
-        castDebugLogger.info(LOG_TAG, "Shaka Player load() call successful for:", manifestUri);
-
-        request.media.contentId = request.media.contentId || manifestUri;
+        castDebugLogger.info(LOG_TAG, "Shaka load() successful for:", manifestUri);
         request.media.streamType = cast.framework.messages.StreamType.BUFFERED;
-        if (!request.media.metadata) {
-          request.media.metadata = new cast.framework.messages.GenericMediaMetadata();
-          request.media.metadata.title = "Unknown Title";
-        }
-        return request; // 返回修改後的 request
+        return request;
       } catch (error) {
         onShakaError({ detail: error });
         return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.LOAD_FAILED);
       }
     } else {
-      castDebugLogger.error(LOG_TAG, "LOAD request must contain media.contentUrl");
-      return new cast.framework.messages.ErrorData(cast.framework.messages.ErrorType.INVALID_REQUEST);
+      castDebugLogger.warn(LOG_TAG, "LOAD request without media.contentUrl, passing through.");
+      return request; // 或者返回錯誤，取決於您是否允許沒有 contentUrl 的 LOAD
     }
   }
 );
 
+// 等待 CAF 環境準備就緒
 context.addEventListener(cast.framework.system.EventType.READY, () => {
   castDebugLogger.info(LOG_TAG, 'Cast Receiver Context READY');
   initShakaPlayer();
